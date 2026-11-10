@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "assets": {
+    "schema_version": 1,
+    "next_id": 4,
+    "assets": [
+      {
+        "id": "A0001",
+        "name": "2017 Toyota 4Runner",
+        "year": 2017,
+        "make": "Toyota",
+        "model": "4Runner",
+        "model_code": "GRN285L-GKAGKA",
+        "vin_serial": "JTEBU5JR6H5470907",
+        "engine_code": "1GR-FE",
+        "paint_code": "1G3"
+      },
+      {
+        "id": "A0002",
+        "name": "1998 Chevrolet S10",
+        "year": 1998,
+        "make": "Chevrolet",
+        "model": "S10",
+        "vin_serial": "1GCCS14X1WK105227",
+        "engine_code": "4.3L LF6",
+        "mods": "MerCruiser 4.3 Gen+ engine (serial 0L057753) on LF6 donor, marine 4.3L oil pan",
+        "notes": "2WD"
+      },
+      {
+        "id": "A0003",
+        "name": "Truckasaurus",
+        "year": 2011,
+        "make": "Ram",
+        "vin_serial": "3D7LT2ET4BG551507",
+        "location": "Island",
+        "purchase_date": "2021-06-15",
+        "cost": 18500,
+        "notes": "estimated value $7,500"
+      }
+    ]
+  },
+  "maintenance": {
+    "schema_version": 1,
+    "next_id": 1,
+    "entries": []
+  },
+  "purchases": {
+    "schema_version": 1,
+    "next_id": 2,
+    "lines": [
+      {
+        "id": "P0001",
+        "vendor": "RockAuto",
+        "order_number": "364948524",
+        "unit_price": 147.21,
+        "asset_id": "A0002",
+        "status": "ordered"
+      }
+    ]
+  }
+}

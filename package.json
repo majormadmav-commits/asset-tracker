@@ -1,0 +1,14 @@
+{
+  "name": "asset-tracker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "serve site -l 4173 --no-clipboard",
+    "test": "node --test",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "serve": "^14.2.5"
+  }
+}
