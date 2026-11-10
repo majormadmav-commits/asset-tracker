@@ -82,9 +82,21 @@ test("maintenance, purchase, and photo round-trip", async () => {
   assert.equal(loaded.purchases.lines[0].vendor, "Napa");
 });
 
+test("a photo with nothing read is saved as needs_review without a made-up name", async () => {
+  const { api } = store();
+  const flagged = await api.saveAsset({ photo_ids: ["ph-1"], status: "needs_review", asset_type: "house" });
+  assert.equal(flagged.id, "A0001");
+  assert.equal(flagged.status, "needs_review");
+  assert.equal(flagged.name, undefined);
+  assert.equal(flagged.asset_type, "house");
+  assert.deepEqual(flagged.photo_ids, ["ph-1"]);
+  const loaded = await api.loadAll();
+  assert.equal(loaded.assets.assets[0].status, "needs_review");
+});
+
 test("refuses a missing name, a bad parent, and a second seed import", async () => {
   const { api } = store();
-  await assert.rejects(() => api.saveAsset({ name: " " }), /Name is required/);
+  await assert.rejects(() => api.saveAsset({ name: " " }), /Add a photo or a name/);
   await api.saveAsset({ name: "Cabin" });
   await assert.rejects(() => api.saveAsset({ name: "Furnace", parent_id: "A0001" }).then(() => api.saveAsset({
     id: "A0001",

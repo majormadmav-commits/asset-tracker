@@ -33,7 +33,8 @@ test("blank optional fields are omitted and the name is required", () => {
     year: "1998",
   });
   assert.deepEqual(asset, { name: "Cabin", category: "House", year: 1998 });
-  assert.throws(() => cleanAsset({ name: " " }), /Name is required/);
+  assert.throws(() => cleanAsset({ name: " " }), /Add a photo or a name/);
+  assert.equal(cleanAsset({ photo_ids: ["ph-1"], status: "needs_review" }).status, "needs_review");
   assert.throws(() => cleanAsset({ name: "X", status: "maybe" }), /Status/);
   assert.throws(() => cleanAsset({ name: "X", owner_entity: "Other" }), /Owner/);
 });

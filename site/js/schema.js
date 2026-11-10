@@ -1,25 +1,48 @@
+import { ALL_FIELDS, ASSET_TYPE_IDS } from "./field-config.js";
 import { allocateId, parseId } from "./ids.js";
 
 export const SCHEMA_VERSION = 1;
 
 export const OWNER_ENTITIES = ["AV business", "428 Projects", "Personal"];
-export const ASSET_STATUSES = ["in service", "down", "rebuild", "disposed"];
+export const ASSET_STATUSES = ["in service", "down", "rebuild", "disposed", "needs_review"];
 export const METER_UNITS = ["miles", "hours"];
 export const PURCHASE_STATUSES = ["ordered", "received", "installed", "returned"];
 
 export const ASSET_FIELDS = [
   "id",
   "name",
-  "owner_entity",
-  "category",
-  "parent_id",
+  "asset_type",
   "status",
   "location",
+  "vin_serial",
   "year",
   "make",
   "model",
+  "engine",
+  "drive",
+  "mileage",
+  "oil_type",
+  "tires",
+  "plate",
+  "hin",
+  "engine_make_model_serial",
+  "hours",
+  "brand",
+  "serial",
+  "fuel",
+  "btu",
+  "install_date",
+  "os",
+  "purchase_date",
+  "price",
+  "value",
+  "photo_ids",
+  "notes",
+  "updated_at",
+  "owner_entity",
+  "category",
+  "parent_id",
   "model_code",
-  "vin_serial",
   "engine_code",
   "trans_code",
   "paint_code",
@@ -27,13 +50,9 @@ export const ASSET_FIELDS = [
   "meter_unit",
   "meter_date",
   "mods",
-  "purchase_date",
   "cost",
   "vendor",
   "receipt_url",
-  "photo_ids",
-  "notes",
-  "updated_at",
 ];
 
 export const MAINTENANCE_FIELDS = [
@@ -186,36 +205,32 @@ function dropEmpty(record) {
   return out;
 }
 
+function coerceConfigured(field, value) {
+  if (field.key === "year") return optionalInteger(value, field.label);
+  if (field.input === "number") return optionalNumber(value, field.label);
+  if (field.input === "date") return optionalDate(value, field.label);
+  if (field.input === "textarea" || field.input === "text") return optionalText(value);
+  return optionalText(value);
+}
+
 export function cleanAsset(input) {
-  const name = optionalText(input.name);
-  if (!name) throw new Error("Name is required.");
+  const configured = {};
+  for (const field of ALL_FIELDS) configured[field.key] = coerceConfigured(field, input[field.key]);
+  const assetType = optionalText(input.asset_type);
+  if (assetType && !ASSET_TYPE_IDS.includes(assetType)) {
+    throw new Error(`Type must be one of: ${ASSET_TYPE_IDS.join(", ")}.`);
+  }
   const record = dropEmpty({
+    ...configured,
     id: optionalText(input.id),
-    name,
+    asset_type: assetType,
     owner_entity: assertEnum(optionalText(input.owner_entity), OWNER_ENTITIES, "Owner"),
-    category: optionalText(input.category),
     parent_id: optionalText(input.parent_id),
     status: assertEnum(optionalText(input.status), ASSET_STATUSES, "Status"),
-    location: optionalText(input.location),
-    year: optionalInteger(input.year, "Year"),
-    make: optionalText(input.make),
-    model: optionalText(input.model),
-    model_code: optionalText(input.model_code),
-    vin_serial: optionalText(input.vin_serial),
-    engine_code: optionalText(input.engine_code),
-    trans_code: optionalText(input.trans_code),
-    paint_code: optionalText(input.paint_code),
-    meter_value: optionalNumber(input.meter_value, "Meter"),
     meter_unit: assertEnum(optionalText(input.meter_unit), METER_UNITS, "Meter unit"),
-    meter_date: optionalDate(input.meter_date, "Meter date"),
-    mods: optionalText(input.mods),
-    purchase_date: optionalDate(input.purchase_date, "Purchase date"),
-    cost: optionalNumber(input.cost, "Cost"),
-    vendor: optionalText(input.vendor),
-    receipt_url: optionalText(input.receipt_url),
     photo_ids: optionalStringList(input.photo_ids),
-    notes: optionalText(input.notes),
   });
+  if (!record.name && !record.photo_ids?.length) throw new Error("Add a photo or a name.");
   return record;
 }
 

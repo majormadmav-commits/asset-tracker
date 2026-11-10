@@ -1,21 +1,17 @@
-import {
-  ASSET_STATUSES,
-  METER_UNITS,
-  OWNER_ENTITIES,
-  PURCHASE_STATUSES,
-} from "./schema.js";
-import {
-  ASSET_LABELS,
-  displayAssetValue,
-  esc,
-  formatMeter,
-  formatMoney,
-  formatNumber,
-  formatWhen,
-  todayISO,
-} from "./format.js";
+import { ASSET_TYPES, EXTRA_FIELDS, fieldsForType, isMoneyKey, reviewStatus, typeLabel } from "./field-config.js";
+import { esc, formatMoney, formatNumber, todayISO } from "./format.js";
+import { PURCHASE_STATUSES } from "./schema.js";
 
-const CATEGORIES = ["Boat", "Camper", "House", "Vehicle", "Computer", "Appliance", "Component"];
+function assetTitle(asset) {
+  return asset.name || "No name";
+}
+
+function displayValue(key, value) {
+  if (value == null || value === "") return "";
+  if (isMoneyKey(key)) return formatMoney(value);
+  if (typeof value === "number") return formatNumber(value);
+  return String(value);
+}
 
 function banner(state) {
   if (state.busy && state.busyText) {
@@ -30,9 +26,15 @@ function banner(state) {
   </div>`;
 }
 
-function modeLine(state) {
-  if (state.mode === "drive") return "Google Drive";
-  return "Local mode: data stays in this browser";
+function nav(state) {
+  const view = state.view?.name;
+  const item = (href, label, current) =>
+    `<a class="button ${current ? "primary" : "secondary"}" href="${esc(href)}"${current ? ' aria-current="page"' : ""}>${esc(label)}</a>`;
+  return `<nav class="big-nav" aria-label="Main">
+    ${item("#/", "Assets", view === "list" || view === "detail" || view === "purchase")}
+    ${item("#/asset/new", "+ Add Asset", view === "asset-form")}
+    ${item("#/maintenance", "Log Maintenance", view === "maintenance")}
+  </nav>`;
 }
 
 function shell(state, main) {
@@ -40,562 +42,253 @@ function shell(state, main) {
     state.mode === "drive" && state.signedIn
       ? `<button type="button" class="text-button light" data-action="sign-out">Sign out</button>`
       : "";
+  const mode = state.mode === "drive" ? "Google Drive" : "Local mode: data stays in this browser";
   return `<div class="app">
     <header class="top">
       <div class="brand-row">
-        <a class="brand" href="#/">Asset Tracker</a>
+        <h1 class="brand">Asset Tracker</h1>
         ${signOut}
       </div>
-      <p class="mode-line">${esc(modeLine(state))}</p>
+      <p class="mode-line">${esc(mode)}</p>
     </header>
+    ${state.data ? nav(state) : ""}
     <div class="banner-slot">${banner(state)}</div>
-    <main id="main" data-view="${esc(state.view.name)}"${state.busy ? ' aria-busy="true"' : ""}>${main}</main>
+    <main id="main" data-view="${esc(state.view?.name || "")}"${state.busy ? ' aria-busy="true"' : ""}>${main}</main>
   </div>`;
-}
-
-function optionList(values, current, blankLabel) {
-  const blank = `<option value="">${esc(blankLabel)}</option>`;
-  const rest = values
-    .map((value) => {
-      const selected = value === current ? " selected" : "";
-      return `<option value="${esc(value)}"${selected}>${esc(value)}</option>`;
-    })
-    .join("");
-  return blank + rest;
-}
-
-function fieldText({ label, name, value = "", type = "text", inputmode, spellcheck, autocapitalize, list, required }) {
-  const extras = [
-    inputmode ? ` inputmode="${esc(inputmode)}"` : "",
-    spellcheck != null ? ` spellcheck="${spellcheck ? "true" : "false"}"` : "",
-    autocapitalize ? ` autocapitalize="${esc(autocapitalize)}"` : "",
-    list ? ` list="${esc(list)}"` : "",
-    required ? " required" : "",
-  ].join("");
-  return `<label class="field">
-    <span>${esc(label)}</span>
-    <input name="${esc(name)}" type="${esc(type)}" value="${esc(value)}"${extras}>
-  </label>`;
-}
-
-function fieldArea({ label, name, value = "" }) {
-  return `<label class="field">
-    <span>${esc(label)}</span>
-    <textarea name="${esc(name)}">${esc(value)}</textarea>
-  </label>`;
-}
-
-function fieldSelect({ label, name, optionsHtml }) {
-  return `<label class="field">
-    <span>${esc(label)}</span>
-    <select name="${esc(name)}">${optionsHtml}</select>
-  </label>`;
-}
-
-function backLink(href, label) {
-  return `<a class="back" href="${esc(href)}"><span class="chevron" aria-hidden="true">‹</span> ${esc(label)}</a>`;
-}
-
-function assetById(state, id) {
-  return state.data?.assets.assets.find((asset) => asset.id === id) || null;
-}
-
-function parentOptions(state, selfId, selected) {
-  const assets = state.data?.assets.assets || [];
-  const blocked = new Set();
-  if (selfId) {
-    blocked.add(selfId);
-    const childrenOf = new Map();
-    for (const asset of assets) {
-      if (!asset.parent_id) continue;
-      if (!childrenOf.has(asset.parent_id)) childrenOf.set(asset.parent_id, []);
-      childrenOf.get(asset.parent_id).push(asset.id);
-    }
-    const stack = [selfId];
-    while (stack.length) {
-      const id = stack.pop();
-      for (const child of childrenOf.get(id) || []) {
-        if (!blocked.has(child)) {
-          blocked.add(child);
-          stack.push(child);
-        }
-      }
-    }
-  }
-  const choices = assets
-    .filter((asset) => !blocked.has(asset.id))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const opts = [`<option value="">None</option>`]
-    .concat(
-      choices.map((asset) => {
-        const selectedAttr = asset.id === selected ? " selected" : "";
-        return `<option value="${esc(asset.id)}"${selectedAttr}>${esc(asset.name)} (${esc(asset.id)})</option>`;
-      }),
-    )
-    .join("");
-  return opts;
-}
-
-function matches(asset, query) {
-  const hay = [asset.name, asset.vin_serial, asset.category].filter(Boolean).join("\n").toLowerCase();
-  return hay.includes(query);
-}
-
-function visibleIds(assets, query) {
-  const q = query.trim().toLowerCase();
-  if (!q) return new Set(assets.map((asset) => asset.id));
-  const byId = new Map(assets.map((asset) => [asset.id, asset]));
-  const children = new Map();
-  for (const asset of assets) {
-    if (!asset.parent_id) continue;
-    if (!children.has(asset.parent_id)) children.set(asset.parent_id, []);
-    children.get(asset.parent_id).push(asset.id);
-  }
-  const ids = new Set();
-  const addDescendants = (id) => {
-    ids.add(id);
-    for (const child of children.get(id) || []) addDescendants(child);
-  };
-  for (const asset of assets) {
-    if (!matches(asset, q)) continue;
-    let parent = asset.parent_id;
-    while (parent && byId.has(parent)) {
-      ids.add(parent);
-      parent = byId.get(parent).parent_id;
-    }
-    addDescendants(asset.id);
-  }
-  return ids;
 }
 
 function statusChip(status) {
   if (!status) return "";
-  const slug = status.replace(/\s+/g, "-");
-  return `<span class="chip status-${slug}">${esc(status)}</span>`;
-}
-
-function assetCard(asset, parent) {
-  const meta = [asset.category, asset.location].filter(Boolean).join(" · ");
-  const vin = asset.vin_serial ? `<p class="vin mono">${esc(asset.vin_serial)}</p>` : "";
-  const part = parent ? `<p class="part-of">Part of ${esc(parent.name)}</p>` : "";
-  return `<a class="asset-card" href="#/asset/${esc(asset.id)}" data-testid="asset-card" data-id="${esc(asset.id)}">
-    <span class="asset-card-top">
-      <span class="asset-name">${esc(asset.name)}</span>
-      ${statusChip(asset.status)}
-    </span>
-    ${part}
-    ${meta ? `<p class="meta">${esc(meta)}</p>` : ""}
-    ${vin}
-  </a>`;
-}
-
-function buildTree(assets) {
-  const byParent = new Map();
-  const ids = new Set(assets.map((asset) => asset.id));
-  for (const asset of assets) {
-    const key = asset.parent_id && ids.has(asset.parent_id) ? asset.parent_id : "";
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key).push(asset);
-  }
-  for (const list of byParent.values()) {
-    list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  }
-  return byParent;
-}
-
-function renderBranch(byParent, id, depth, assetsById) {
-  const nodes = byParent.get(id) || [];
-  if (!nodes.length) return "";
-  const items = nodes
-    .map((asset) => {
-      const parent = asset.parent_id ? assetsById.get(asset.parent_id) : null;
-      const kids = renderBranch(byParent, asset.id, depth + 1, assetsById);
-      return `<li class="${depth ? "child" : "root"}">${assetCard(asset, depth ? parent : null)}${kids}</li>`;
-    })
-    .join("");
-  return `<ul class="asset-tree depth-${Math.min(depth, 4)}">${items}</ul>`;
-}
-
-export function listCountText(state) {
-  const assets = state.data?.assets.assets || [];
-  if (!assets.length) return "";
-  const shown = visibleIds(assets, state.search);
-  let count = 0;
-  for (const asset of assets) if (shown.has(asset.id)) count += 1;
-  return `${count} of ${assets.length}`;
-}
-
-export function listResultsHtml(state) {
-  const assets = state.data?.assets.assets || [];
-  const shown = visibleIds(assets, state.search);
-  const filtered = assets.filter((asset) => shown.has(asset.id));
-  if (!assets.length) {
-    return `<div class="empty">
-      <p>No assets yet.</p>
-      <p class="hint">Add one, or import the three vehicles already on file.</p>
-    </div>`;
-  }
-  if (!filtered.length) return `<div class="empty"><p>Nothing matches that search.</p></div>`;
-  const byParent = buildTree(filtered);
-  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
-  return renderBranch(byParent, "", 0, assetsById);
+  const label = status === "needs_review" ? "needs review" : status;
+  return `<span class="chip status-${esc(status)}">${esc(label)}</span>`;
 }
 
 function listHtml(state) {
   const assets = state.data?.assets.assets || [];
+  const rows = assets
+    .slice()
+    .sort((a, b) => assetTitle(a).localeCompare(assetTitle(b), undefined, { sensitivity: "base" }))
+    .map((asset) => {
+      const type = typeLabel(asset.asset_type);
+      return `<li>
+        <a class="asset-row" href="#/asset/${esc(asset.id)}" data-testid="asset-row" data-id="${esc(asset.id)}">
+          <span>
+            <span class="asset-name">${esc(assetTitle(asset))}</span>
+            ${type ? `<span class="meta"> ${esc(type)}</span>` : ""}
+          </span>
+          ${statusChip(asset.status)}
+        </a>
+      </li>`;
+    })
+    .join("");
   const empty = assets.length === 0;
-  const importButton = empty
-    ? `<button type="button" class="button secondary" data-action="import-seed" data-testid="import-seed">Import seed data</button>`
-    : "";
-  const count = listCountText(state);
   return `<section class="screen">
-    <div class="screen-head">
-      <h1>Assets</h1>
-      ${count ? `<p class="count" data-testid="asset-count">${esc(count)}</p>` : ""}
-    </div>
-    <label class="field search-field">
-      <span class="sr-only">Search assets</span>
-      <input id="search" type="search" placeholder="Search name, VIN, or category" value="${esc(state.search)}" autocomplete="off" enterkeyhint="search">
-    </label>
-    <div class="stack">
-      <a class="button primary" href="#/asset/new">Add asset</a>
-      ${importButton}
-    </div>
-    <div id="asset-list" aria-live="polite">${listResultsHtml(state)}</div>
+    <button type="button" class="button secondary" data-action="refresh">Refresh</button>
+    ${empty ? `<div class="empty"><p>No assets yet.</p><button type="button" class="button secondary" data-action="import-seed" data-testid="import-seed">Import seed data</button></div>` : `<ul class="plain-list">${rows}</ul>`}
   </section>`;
 }
 
 function detailRows(asset) {
-  const keys = Object.keys(ASSET_LABELS);
-  return keys
-    .filter((key) => asset[key] != null && asset[key] !== "")
-    .map((key) => {
-      const value = displayAssetValue(key, asset[key]);
-      const content =
-        key === "receipt_url" && safeUrl(value)
-          ? `<a href="${esc(safeUrl(value))}" target="_blank" rel="noopener">${esc(value)}</a>`
-          : esc(key === "cost" ? formatMoney(asset.cost) : value);
-      return `<div class="row"><dt>${esc(ASSET_LABELS[key])}</dt><dd>${content}</dd></div>`;
-    })
-    .join("");
-}
-
-function safeUrl(value) {
-  try {
-    const url = new URL(value);
-    if (url.protocol === "http:" || url.protocol === "https:") return url.href;
-  } catch {
-    /* not a url */
+  const fields = asset.asset_type ? fieldsForType(asset.asset_type) : [...fieldsForType("car"), ...EXTRA_FIELDS];
+  const seen = new Set(["name"]);
+  const rows = [];
+  const pool = asset.asset_type ? [...fields, ...EXTRA_FIELDS] : fields;
+  for (const field of pool) {
+    if (seen.has(field.key)) continue;
+    seen.add(field.key);
+    const value = asset[field.key];
+    if (value == null || value === "") continue;
+    rows.push(`<div class="row"><dt>${esc(field.label)}</dt><dd>${esc(displayValue(field.key, value))}</dd></div>`);
   }
-  return "";
+  return rows.join("");
 }
 
-function photoFigure(state, photoId, testId) {
+function fileFigure(state, photoId) {
   const url = state.photoUrls[photoId];
   if (url && url !== "loading") {
-    return `<img class="photo" data-testid="${esc(testId)}" alt="Photo" src="${esc(url)}">`;
+    if (String(url).startsWith("data:application/pdf")) {
+      return `<p><a href="${esc(url)}" target="_blank" rel="noopener">Open PDF</a></p>`;
+    }
+    return `<img class="photo" data-testid="asset-photo" alt="Asset photo" src="${esc(url)}">`;
   }
   if (url === "loading") return `<p class="hint">Loading photo…</p>`;
-  const error = state.photoErrors?.[photoId];
-  return `<p class="hint">${esc(error || `Photo ${photoId} is unavailable.`)}</p>`;
-}
-
-function maintenanceHtml(state, assetId) {
-  const entries = (state.data?.maintenance.entries || [])
-    .filter((entry) => entry.asset_id === assetId)
-    .sort(byDateDesc);
-  if (!entries.length) return `<p class="hint">No maintenance yet.</p>`;
-  return entries
-    .map((entry) => {
-      const bits = [
-        entry.work ? `<p class="work">${esc(entry.work)}</p>` : "",
-        entry.parts ? `<p><span class="k">Parts</span> ${esc(entry.parts)}</p>` : "",
-        entry.fluids ? `<p><span class="k">Fluids</span> ${esc(entry.fluids)}</p>` : "",
-        entry.who ? `<p><span class="k">Who</span> ${esc(entry.who)}</p>` : "",
-        entry.meter != null ? `<p><span class="k">Meter</span> ${esc(formatNumber(entry.meter))}</p>` : "",
-        entry.cost != null ? `<p><span class="k">Cost</span> ${esc(formatMoney(entry.cost))}</p>` : "",
-        entry.notes ? `<p>${esc(entry.notes)}</p>` : "",
-        entry.receipt_url && safeUrl(entry.receipt_url)
-          ? `<p><a href="${esc(safeUrl(entry.receipt_url))}" target="_blank" rel="noopener">Receipt</a></p>`
-          : "",
-        ...(entry.photo_ids || []).map((id) => photoFigure(state, id, "maintenance-photo")),
-      ].join("");
-      return `<article class="record" data-testid="maintenance-entry">
-        <header><span class="mono">${esc(entry.id)}</span><time>${esc(entry.date || "")}</time></header>
-        ${bits}
-      </article>`;
-    })
-    .join("");
-}
-
-function purchaseHtml(state, assetId) {
-  const lines = (state.data?.purchases.lines || [])
-    .filter((line) => line.asset_id === assetId)
-    .sort(byDateDesc);
-  if (!lines.length) return `<p class="hint">No purchases yet.</p>`;
-  return lines
-    .map((line) => {
-      const title = line.description || line.part_number || line.vendor || "Purchase";
-      const price =
-        line.unit_price != null
-          ? `<p><span class="k">${line.qty == null ? "Price" : "Unit price"}</span> ${esc(formatMoney(line.unit_price))}</p>`
-          : "";
-      return `<article class="record" data-testid="purchase-line">
-        <header><span class="mono">${esc(line.id)}</span>${statusChip(line.status)}</header>
-        <p class="work">${esc(title)}</p>
-        ${line.date ? `<p><span class="k">Date</span> ${esc(line.date)}</p>` : ""}
-        ${line.vendor && title !== line.vendor ? `<p><span class="k">Vendor</span> ${esc(line.vendor)}</p>` : ""}
-        ${line.order_number ? `<p><span class="k">Order</span> <span class="mono">${esc(line.order_number)}</span></p>` : ""}
-        ${line.part_number ? `<p><span class="k">Part</span> <span class="mono">${esc(line.part_number)}</span></p>` : ""}
-        ${line.qty != null ? `<p><span class="k">Qty</span> ${esc(formatNumber(line.qty))}</p>` : ""}
-        ${price}
-        ${line.shipping != null ? `<p><span class="k">Shipping</span> ${esc(formatMoney(line.shipping))}</p>` : ""}
-      </article>`;
-    })
-    .join("");
-}
-
-function byDateDesc(a, b) {
-  const date = String(b.date || "").localeCompare(String(a.date || ""));
-  if (date) return date;
-  return String(b.id || "").localeCompare(String(a.id || ""));
+  return `<p class="hint">${esc(state.photoErrors?.[photoId] || `Photo ${photoId} is unavailable.`)}</p>`;
 }
 
 function detailHtml(state) {
-  const asset = assetById(state, state.view.id);
+  const asset = state.data?.assets.assets.find((item) => item.id === state.view.id);
   if (!asset) {
-    return `<section class="screen"><h1>Asset not found</h1><p class="hint">It is not in the file that just loaded.</p><a class="button secondary" href="#/">Back to assets</a></section>`;
+    return `<section class="screen"><h2>Not found</h2><p class="hint">That asset is not in the file that just loaded.</p></section>`;
   }
-  const parent = asset.parent_id ? assetById(state, asset.parent_id) : null;
-  const children = (state.data?.assets.assets || []).filter((item) => item.parent_id === asset.id);
-  const meter = formatMeter(asset);
-  const childList = children.length
-    ? `<ul class="child-list">${children
+  const maintenance = (state.data?.maintenance.entries || [])
+    .filter((entry) => entry.asset_id === asset.id)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const purchases = (state.data?.purchases.lines || [])
+    .filter((line) => line.asset_id === asset.id)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const maintenanceHtml = maintenance.length
+    ? maintenance
         .map(
-          (child) =>
-            `<li><a href="#/asset/${esc(child.id)}">${esc(child.name)}</a>${child.category ? ` <span class="meta">${esc(child.category)}</span>` : ""}</li>`,
+          (entry) => `<article class="record" data-testid="maintenance-entry">
+            <header><span class="mono">${esc(entry.id)}</span><span>${esc(entry.date || "")}</span></header>
+            ${entry.work ? `<p class="work">${esc(entry.work)}</p>` : ""}
+            ${entry.notes ? `<p>${esc(entry.notes)}</p>` : ""}
+            ${entry.parts ? `<p>${esc(entry.parts)}</p>` : ""}
+          </article>`,
         )
-        .join("")}</ul>`
-    : `<p class="hint">No components under this asset.</p>`;
+        .join("")
+    : `<p class="hint">No maintenance yet.</p>`;
+  const purchaseHtml = purchases.length
+    ? purchases
+        .map((line) => {
+          const title = line.description || line.part_number || line.vendor || "Purchase";
+          const price =
+            line.unit_price != null
+              ? `<p><span class="k">${line.qty == null ? "Price" : "Unit price"}</span> ${esc(formatMoney(line.unit_price))}</p>`
+              : "";
+          return `<article class="record" data-testid="purchase-line">
+            <header><span class="mono">${esc(line.id)}</span>${statusChip(line.status)}</header>
+            <p class="work">${esc(title)}</p>
+            ${line.vendor && title !== line.vendor ? `<p><span class="k">Vendor</span> ${esc(line.vendor)}</p>` : ""}
+            ${line.order_number ? `<p><span class="k">Order</span> <span class="mono">${esc(line.order_number)}</span></p>` : ""}
+            ${price}
+          </article>`;
+        })
+        .join("")
+    : `<p class="hint">No purchases yet.</p>`;
   return `<section class="screen">
-    ${backLink("#/", "Assets")}
     <div class="screen-head">
-      <h1>${esc(asset.name)}</h1>
+      <h2>${esc(assetTitle(asset))}</h2>
       ${statusChip(asset.status)}
     </div>
     <p class="id-line mono" data-testid="asset-id">${esc(asset.id)}</p>
-    ${parent ? `<p class="part-of">Part of <a href="#/asset/${esc(parent.id)}">${esc(parent.name)}</a></p>` : ""}
-    <p class="meter" data-testid="meter-value">${meter ? esc(meter) : "No meter reading"}</p>
-    <div class="action-grid">
-      <a class="button secondary" href="#/asset/${esc(asset.id)}/edit">Edit</a>
-      <a class="button secondary" href="#/asset/${esc(asset.id)}/meter">Update meter</a>
-      <a class="button primary" href="#/asset/${esc(asset.id)}/maintenance">Add maintenance</a>
-      <a class="button secondary" href="#/asset/${esc(asset.id)}/purchase">Add purchase</a>
-      <a class="button secondary wide" href="#/asset/new?parent=${esc(asset.id)}">Add component</a>
-    </div>
+    ${typeLabel(asset.asset_type) ? `<p class="meta">${esc(typeLabel(asset.asset_type))}</p>` : ""}
+    ${asset.status === "needs_review" ? `<p data-testid="needs-review">Needs review. A later pass can read the photo and fill the blank fields.</p>` : ""}
     <dl class="facts">${detailRows(asset)}</dl>
-    ${(asset.photo_ids || []).map((id) => photoFigure(state, id, "asset-photo")).join("")}
-    <p class="updated">${asset.updated_at ? `Updated ${esc(formatWhen(asset.updated_at))}` : ""}</p>
-    <h2>Components</h2>
-    ${childList}
-    <div class="section-head">
-      <h2>Maintenance</h2>
-    </div>
-    ${maintenanceHtml(state, asset.id)}
-    <div class="section-head">
-      <h2>Purchases</h2>
-    </div>
-    ${purchaseHtml(state, asset.id)}
+    ${(asset.photo_ids || []).map((id) => fileFigure(state, id)).join("")}
+    <h2>Maintenance</h2>
+    ${maintenanceHtml}
+    <a class="button secondary" href="#/maintenance?asset=${esc(asset.id)}">Log maintenance</a>
+    <h2>Purchases</h2>
+    ${purchaseHtml}
+    <a class="button secondary" href="#/asset/${esc(asset.id)}/purchase">Add purchase</a>
   </section>`;
 }
 
-function formActions(label, busy) {
-  return `<div class="form-actions">
-    <button type="submit" class="button primary"${busy ? " disabled" : ""}>${esc(label)}</button>
-  </div>`;
+function fieldControl(field, value) {
+  const current = value == null ? "" : value;
+  if (field.input === "textarea") {
+    return `<label class="field"><span>${esc(field.label)}</span><textarea name="${esc(field.key)}">${esc(current)}</textarea></label>`;
+  }
+  const type = field.input === "number" ? "number" : field.input === "date" ? "date" : "text";
+  const extra =
+    field.key === "vin_serial" ? ` autocapitalize="characters" spellcheck="false" maxlength="17"` : "";
+  return `<label class="field"><span>${esc(field.label)}</span><input name="${esc(field.key)}" type="${type}" value="${esc(current)}"${extra}></label>`;
+}
+
+function pendingHtml(state) {
+  if (!state.pendingFiles?.length) return "";
+  const review = reviewStatus(state.pendingFiles);
+  const items = state.pendingFiles
+    .map((item) => {
+      const name = item.file?.name || "file";
+      const note = item.decoded ? "VIN read from this photo" : "Not read — will be saved for review";
+      const preview = item.url ? `<img class="photo" alt="" src="${esc(item.url)}">` : `<p class="hint">${esc(name)}</p>`;
+      return `<li data-testid="pending-file">${preview}<p>${esc(note)}</p></li>`;
+    })
+    .join("");
+  const flag = review ? `<p data-testid="will-need-review">This asset will be saved as needs review.</p>` : "";
+  return `<ul class="pending-files">${items}</ul>${flag}`;
 }
 
 function assetFormHtml(state) {
-  const existing = state.view.id ? assetById(state, state.view.id) : null;
-  if (state.view.id && !existing) {
-    return `<section class="screen"><h1>Asset not found</h1>${backLink("#/", "Assets")}</section>`;
-  }
-  const draft = state.draft || existing || {};
-  const parentSelected = draft.parent_id || (!existing && !state.draft ? state.view.parentId || "" : "");
-  const value = (key) => (draft[key] == null ? "" : draft[key]);
+  const draft = state.draft || { asset_type: "car" };
+  const type = draft.asset_type || "car";
+  const options = ASSET_TYPES.map((item) => {
+    const selected = item.id === type ? " selected" : "";
+    return `<option value="${esc(item.id)}"${selected}>${esc(item.label)}</option>`;
+  }).join("");
+  const fields = fieldsForType(type)
+    .map((field) => fieldControl(field, draft[field.key]))
+    .join("");
+  const note = state.vinNote ? `<p class="hint" data-testid="vin-note">${esc(state.vinNote)}</p>` : "";
   return `<section class="screen">
-    ${backLink(existing ? `#/asset/${existing.id}` : "#/", existing ? "Cancel" : "Assets")}
-    <h1>${existing ? "Edit asset" : "New asset"}</h1>
+    <h2>Add asset</h2>
     <form data-form="asset" novalidate>
-      ${existing ? `<input type="hidden" name="id" value="${esc(existing.id)}">` : ""}
-      <fieldset>
-        <legend>What it is</legend>
-        ${fieldText({ label: "Name", name: "name", value: value("name"), required: true })}
-        ${fieldSelect({
-          label: "Owner",
-          name: "owner_entity",
-          optionsHtml: optionList(OWNER_ENTITIES, value("owner_entity"), "Blank"),
-        })}
-        ${fieldText({ label: "Category", name: "category", value: value("category"), list: "categories" })}
-        <datalist id="categories">${CATEGORIES.map((item) => `<option value="${esc(item)}"></option>`).join("")}</datalist>
-        ${fieldSelect({
-          label: "Parent asset",
-          name: "parent_id",
-          optionsHtml: parentOptions(state, existing?.id, parentSelected),
-        })}
-        ${fieldSelect({
-          label: "Status",
-          name: "status",
-          optionsHtml: optionList(ASSET_STATUSES, value("status"), "Blank"),
-        })}
-        ${fieldText({ label: "Location", name: "location", value: value("location") })}
-      </fieldset>
-      <fieldset>
-        <legend>Nameplate</legend>
-        ${fieldText({ label: "Year", name: "year", value: value("year"), type: "number", inputmode: "numeric" })}
-        ${fieldText({ label: "Make", name: "make", value: value("make") })}
-        ${fieldText({ label: "Model", name: "model", value: value("model") })}
-        ${fieldText({ label: "Model code", name: "model_code", value: value("model_code"), spellcheck: false })}
-        ${fieldText({
-          label: "VIN / serial",
-          name: "vin_serial",
-          value: value("vin_serial"),
-          spellcheck: false,
-          autocapitalize: "characters",
-        })}
-        ${fieldText({ label: "Engine", name: "engine_code", value: value("engine_code"), spellcheck: false })}
-        ${fieldText({ label: "Transmission", name: "trans_code", value: value("trans_code"), spellcheck: false })}
-        ${fieldText({ label: "Paint", name: "paint_code", value: value("paint_code"), spellcheck: false })}
-      </fieldset>
-      <fieldset>
-        <legend>Meter</legend>
-        ${fieldText({ label: "Meter", name: "meter_value", value: value("meter_value"), type: "number", inputmode: "decimal" })}
-        ${fieldSelect({
-          label: "Meter unit",
-          name: "meter_unit",
-          optionsHtml: optionList(METER_UNITS, value("meter_unit"), "Blank"),
-        })}
-        ${fieldText({ label: "Meter date", name: "meter_date", value: value("meter_date"), type: "date" })}
-      </fieldset>
-      <fieldset>
-        <legend>Purchase</legend>
-        ${fieldText({ label: "Purchase date", name: "purchase_date", value: value("purchase_date"), type: "date" })}
-        ${fieldText({ label: "Cost", name: "cost", value: value("cost"), type: "number", inputmode: "decimal" })}
-        ${fieldText({ label: "Vendor", name: "vendor", value: value("vendor") })}
-        ${fieldText({ label: "Receipt URL", name: "receipt_url", value: value("receipt_url"), type: "url", spellcheck: false })}
-      </fieldset>
-      ${fieldArea({ label: "Mods", name: "mods", value: value("mods") })}
-      ${fieldArea({ label: "Notes", name: "notes", value: value("notes") })}
-      ${formActions(existing ? "Save changes" : "Save asset", state.busy)}
+      <label class="photo-picker">
+        Take photo / upload file
+        <input id="photo" name="photo" type="file" accept="image/*,application/pdf,.pdf" multiple>
+      </label>
+      ${pendingHtml(state)}
+      <label class="field">
+        <span>Type</span>
+        <select name="asset_type">${options}</select>
+      </label>
+      ${note}
+      ${fields}
+      <div class="form-actions"><button type="submit" class="button primary">Save</button></div>
     </form>
   </section>`;
 }
 
-function meterFormHtml(state) {
-  const asset = assetById(state, state.view.id);
-  if (!asset) return `<section class="screen"><h1>Asset not found</h1></section>`;
-  const draft = state.draft || {
-    meter_value: asset.meter_value ?? "",
-    meter_unit: asset.meter_unit || "",
-    meter_date: asset.meter_date || todayISO(),
-  };
-  return `<section class="screen">
-    ${backLink(`#/asset/${asset.id}`, "Cancel")}
-    <h1>Update meter</h1>
-    <p class="hint">${esc(asset.name)}</p>
-    <form data-form="meter" novalidate>
-      ${fieldText({
-        label: "Meter",
-        name: "meter_value",
-        value: draft.meter_value ?? "",
-        type: "number",
-        inputmode: "decimal",
-      })}
-      ${fieldSelect({
-        label: "Unit",
-        name: "meter_unit",
-        optionsHtml: optionList(METER_UNITS, draft.meter_unit || "", "Blank"),
-      })}
-      ${fieldText({ label: "Date", name: "meter_date", value: draft.meter_date || "", type: "date" })}
-      ${formActions("Save meter", state.busy)}
-    </form>
-  </section>`;
-}
-
-function photoBlock(state) {
-  if (!state.pendingPhoto) {
-    return `<label class="field">
-      <span>Photo</span>
-      <input id="photo" name="photo" type="file" accept="image/*" capture="environment">
-    </label>`;
-  }
-  const shot = state.pendingPhoto;
-  return `<div class="photo-ready">
-    <img class="photo" data-testid="photo-preview" alt="Resized photo preview" src="${esc(shot.url)}">
-    <p class="hint">Ready: ${shot.width}×${shot.height} JPEG</p>
-    <button type="button" class="button secondary" data-action="clear-photo">Remove photo</button>
-    <label class="field">
-      <span>Replace photo</span>
-      <input id="photo" name="photo" type="file" accept="image/*" capture="environment">
-    </label>
-  </div>`;
+function assetOptions(state, selected) {
+  const assets = state.data?.assets.assets || [];
+  const options = [`<option value="">Choose</option>`]
+    .concat(
+      assets.map((asset) => {
+        const on = asset.id === selected ? " selected" : "";
+        return `<option value="${esc(asset.id)}"${on}>${esc(assetTitle(asset))} (${esc(asset.id)})</option>`;
+      }),
+    )
+    .join("");
+  return options;
 }
 
 function maintenanceFormHtml(state) {
-  const asset = assetById(state, state.view.id);
-  if (!asset) return `<section class="screen"><h1>Asset not found</h1></section>`;
-  const draft = state.draft || { date: todayISO(), meter: asset.meter_value ?? "" };
-  const value = (key) => (draft[key] == null ? "" : draft[key]);
+  const assets = state.data?.assets.assets || [];
+  if (!assets.length) {
+    return `<section class="screen"><h2>Log maintenance</h2><p>Add an asset first.</p></section>`;
+  }
+  const draft = state.draft || { date: todayISO(), asset_id: state.view.assetId || "" };
   return `<section class="screen">
-    ${backLink(`#/asset/${asset.id}`, "Cancel")}
-    <h1>Add maintenance</h1>
-    <p class="hint">${esc(asset.name)}</p>
+    <h2>Log maintenance</h2>
     <form data-form="maintenance" novalidate>
-      ${fieldText({ label: "Date", name: "date", value: value("date"), type: "date" })}
-      ${fieldText({ label: "Meter", name: "meter", value: value("meter"), type: "number", inputmode: "decimal" })}
-      ${photoBlock(state)}
-      ${fieldArea({ label: "Work", name: "work", value: value("work") })}
-      ${fieldArea({ label: "Parts", name: "parts", value: value("parts") })}
-      ${fieldText({ label: "Fluids", name: "fluids", value: value("fluids") })}
-      ${fieldText({ label: "Who", name: "who", value: value("who") })}
-      ${fieldText({ label: "Cost", name: "cost", value: value("cost"), type: "number", inputmode: "decimal" })}
-      ${fieldArea({ label: "Notes", name: "notes", value: value("notes") })}
-      ${fieldText({ label: "Receipt URL", name: "receipt_url", value: value("receipt_url"), type: "url", spellcheck: false })}
-      ${formActions("Save maintenance", state.busy)}
+      <label class="field"><span>Asset</span><select name="asset_id">${assetOptions(state, draft.asset_id || "")}</select></label>
+      <label class="field"><span>Date</span><input name="date" type="date" value="${esc(draft.date || "")}"></label>
+      <label class="field"><span>Work</span><textarea name="work">${esc(draft.work || "")}</textarea></label>
+      <label class="field"><span>Notes</span><textarea name="notes">${esc(draft.notes || "")}</textarea></label>
+      <label class="field"><span>Photo</span><input id="maint-photo" name="photo" type="file" accept="image/*" capture="environment"></label>
+      <div class="form-actions"><button type="submit" class="button primary">Save maintenance</button></div>
     </form>
   </section>`;
 }
 
 function purchaseFormHtml(state) {
-  const asset = assetById(state, state.view.id);
-  if (!asset && state.view.id) return `<section class="screen"><h1>Asset not found</h1></section>`;
-  const draft = state.draft || { date: todayISO(), asset_id: state.view.id || "", status: "" };
-  const value = (key) => (draft[key] == null ? "" : draft[key]);
+  const asset = state.data?.assets.assets.find((item) => item.id === state.view.id);
+  if (!asset) return `<section class="screen"><h2>Not found</h2></section>`;
+  const draft = state.draft || { date: todayISO(), asset_id: asset.id };
+  const statuses = [`<option value="">Blank</option>`]
+    .concat(
+      PURCHASE_STATUSES.map((status) => {
+        const selected = draft.status === status ? " selected" : "";
+        return `<option value="${esc(status)}"${selected}>${esc(status)}</option>`;
+      }),
+    )
+    .join("");
   return `<section class="screen">
-    ${backLink(asset ? `#/asset/${asset.id}` : "#/", "Cancel")}
-    <h1>Add purchase</h1>
-    ${asset ? `<p class="hint">${esc(asset.name)}</p>` : ""}
+    <h2>Add purchase</h2>
+    <p class="hint">${esc(assetTitle(asset))}</p>
     <form data-form="purchase" novalidate>
-      ${fieldText({ label: "Date", name: "date", value: value("date"), type: "date" })}
-      ${fieldText({ label: "Vendor", name: "vendor", value: value("vendor") })}
-      ${fieldText({ label: "Order number", name: "order_number", value: value("order_number"), spellcheck: false })}
-      ${fieldText({ label: "Part number", name: "part_number", value: value("part_number"), spellcheck: false })}
-      ${fieldText({ label: "Description", name: "description", value: value("description") })}
-      ${fieldText({ label: "Qty", name: "qty", value: value("qty"), type: "number", inputmode: "decimal" })}
-      ${fieldText({ label: "Price", name: "unit_price", value: value("unit_price"), type: "number", inputmode: "decimal" })}
-      ${fieldText({ label: "Shipping", name: "shipping", value: value("shipping"), type: "number", inputmode: "decimal" })}
-      ${fieldText({ label: "Receipt URL", name: "receipt_url", value: value("receipt_url"), type: "url", spellcheck: false })}
-      ${fieldSelect({
-        label: "Asset",
-        name: "asset_id",
-        optionsHtml: parentOptions(state, null, value("asset_id")),
-      })}
-      ${fieldSelect({
-        label: "Status",
-        name: "status",
-        optionsHtml: optionList(PURCHASE_STATUSES, value("status"), "Blank"),
-      })}
-      ${formActions("Save purchase", state.busy)}
+      <input type="hidden" name="asset_id" value="${esc(asset.id)}">
+      <label class="field"><span>Date</span><input name="date" type="date" value="${esc(draft.date || "")}"></label>
+      <label class="field"><span>Vendor</span><input name="vendor" value="${esc(draft.vendor || "")}"></label>
+      <label class="field"><span>Order number</span><input name="order_number" value="${esc(draft.order_number || "")}"></label>
+      <label class="field"><span>Part number</span><input name="part_number" value="${esc(draft.part_number || "")}"></label>
+      <label class="field"><span>Description</span><input name="description" value="${esc(draft.description || "")}"></label>
+      <label class="field"><span>Qty</span><input name="qty" type="number" value="${esc(draft.qty ?? "")}"></label>
+      <label class="field"><span>Price</span><input name="unit_price" type="number" value="${esc(draft.unit_price ?? "")}"></label>
+      <label class="field"><span>Status</span><select name="status">${statuses}</select></label>
+      <div class="form-actions"><button type="submit" class="button primary">Save purchase</button></div>
     </form>
   </section>`;
 }
@@ -604,45 +297,27 @@ function signInHtml(state) {
   const problem = state.message
     ? `<div class="banner error" role="alert" data-testid="error-banner"><p>${esc(state.message.text)}</p></div>`
     : "";
-  const busy = state.busy
+  const action = state.busy
     ? `<p class="hint" role="status">${esc(state.busyText || "Working…")}</p>`
     : `<button type="button" class="button primary" data-action="sign-in">Sign in with Google</button>`;
   return `<div class="app">
-    <header class="top">
-      <div class="brand-row"><span class="brand">Asset Tracker</span></div>
-      <p class="mode-line">Google Drive</p>
-    </header>
-    <main id="main" data-view="sign-in">
-      <section class="screen sign-in">
-        ${problem}
-        <h1>Sign in</h1>
-        <p>The asset files live in a Google Drive folder named Asset Tracker. This app creates that folder the first time you sign in. It only asks for access to files it creates.</p>
-        ${busy}
-      </section>
-    </main>
+    <header class="top"><h1 class="brand">Asset Tracker</h1><p class="mode-line">Google Drive</p></header>
+    <main id="main" data-view="sign-in"><section class="screen">${problem}<h2>Sign in</h2><p>Files are stored in a Google Drive folder named Asset Tracker. This page creates that folder the first time you sign in.</p>${action}</section></main>
   </div>`;
 }
 
 export function renderApp(state) {
   if (state.needsSignIn) return signInHtml(state);
-  if (state.booting) {
-    return shell(state, `<section class="screen"><h1>Asset Tracker</h1><p class="hint">Loading…</p></section>`);
-  }
+  if (state.booting) return shell(state, `<section class="screen"><p class="hint">Loading…</p></section>`);
   if (!state.data) {
     return shell(
       state,
-      `<section class="screen">
-        <h1>Could not open the files</h1>
-        <p data-testid="load-error">${esc(state.message?.text || "The files could not be read.")}</p>
-        <button type="button" class="button primary" data-action="retry">Try again</button>
-      </section>`,
+      `<section class="screen"><h2>Could not open the files</h2><p data-testid="load-error">${esc(state.message?.text || "The files could not be read.")}</p><button type="button" class="button primary" data-action="retry">Try again</button></section>`,
     );
   }
   let main = "";
-  if (state.view.name === "list") main = listHtml(state);
-  else if (state.view.name === "detail") main = detailHtml(state);
+  if (state.view.name === "detail") main = detailHtml(state);
   else if (state.view.name === "asset-form") main = assetFormHtml(state);
-  else if (state.view.name === "meter") main = meterFormHtml(state);
   else if (state.view.name === "maintenance") main = maintenanceFormHtml(state);
   else if (state.view.name === "purchase") main = purchaseFormHtml(state);
   else main = listHtml(state);
@@ -650,13 +325,7 @@ export function renderApp(state) {
 }
 
 export function photoIdsOnScreen(state) {
-  if (!state.data || !state.view) return [];
-  if (state.view.name !== "detail") return [];
-  const ids = [];
-  const asset = assetById(state, state.view.id);
-  if (asset?.photo_ids) ids.push(...asset.photo_ids);
-  for (const entry of state.data.maintenance.entries || []) {
-    if (entry.asset_id === state.view.id && entry.photo_ids) ids.push(...entry.photo_ids);
-  }
-  return ids;
+  if (!state.data || state.view?.name !== "detail") return [];
+  const asset = state.data.assets.assets.find((item) => item.id === state.view.id);
+  return asset?.photo_ids ? [...asset.photo_ids] : [];
 }
