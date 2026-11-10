@@ -12,7 +12,7 @@ In the owner's My Drive:
 - `Asset Tracker/assets.json`
 - `Asset Tracker/maintenance.json`
 - `Asset Tracker/purchases.json`
-- `Asset Tracker/Photos/` — JPEG files referenced by `photo_ids`
+- `Asset Tracker/Photos/` — JPEG photos and PDF files referenced by `photo_ids`
 
 The app stores those Drive file ids in the browser under `asset-tracker-drive-ids`. Do not delete the JSON files, do not rename them, and do not upload a second copy. Update the existing file bytes in place (`files.update`).
 
@@ -36,12 +36,13 @@ Pretty-print with two spaces and a trailing newline. Keep each record's keys in 
 
 ### Asset
 
-`id`, `name`, `owner_entity`, `category`, `parent_id`, `status`, `location`, `year`, `make`, `model`, `model_code`, `vin_serial`, `engine_code`, `trans_code`, `paint_code`, `meter_value`, `meter_unit`, `meter_date`, `mods`, `purchase_date`, `cost`, `vendor`, `receipt_url`, `photo_ids`, `notes`, `updated_at`
+`id`, `name`, `asset_type`, `status`, `location`, `vin_serial`, `year`, `make`, `model`, `engine`, `drive`, `mileage`, `oil_type`, `tires`, `plate`, `hin`, `engine_make_model_serial`, `hours`, `brand`, `serial`, `fuel`, `btu`, `install_date`, `os`, `purchase_date`, `price`, `value`, `photo_ids`, `notes`, `updated_at`, then older keys if they already exist: `owner_entity`, `category`, `parent_id`, `model_code`, `engine_code`, `trans_code`, `paint_code`, `meter_value`, `meter_unit`, `meter_date`, `mods`, `cost`, `vendor`, `receipt_url`
 
-Required: `id`, `name`. Everything else is optional.
+Required: `id`. `name` is required unless the asset has at least one photo. Do not invent a name for a photo that could not be read.
 
+- `asset_type`: `car`, `boat`, `camper`, `house`, `tractor`, `computer`, `appliance`, `other`, or omit. Labels on the page are Car/Truck, Boat, Camper, House, Tractor/Small engine, Computer, Appliance/Furnace/Water heater, Other.
 - `owner_entity`: `AV business`, `428 Projects`, `Personal`, or omit
-- `status`: `in service`, `down`, `rebuild`, `disposed`, or omit
+- `status`: `in service`, `down`, `rebuild`, `disposed`, `needs_review`, or omit
 - `meter_unit`: `miles`, `hours`, or omit
 - `parent_id`: an existing asset id. No cycles.
 - `photo_ids`: array of Drive file ids
@@ -90,6 +91,20 @@ When you add a row:
 
 A correct merge for a new asset keeps every asset that was in the re-read, appends the new one, and bumps `next_id`. Editing one asset replaces that record only.
 
+## Photos the page could not read
+
+The add screen tries to read a VIN barcode from each image (BarcodeDetector, then ZXing). A 17-character VIN is sent to the free NHTSA vPIC API (`DecodeVinValues`) and the page fills year, make, model, engine, and drive from that response, and sets `asset_type` to `car`. It stores only values the API actually returned.
+
+Any file that does not produce a VIN — another photo, a PDF, or a picture the scanner could not read — is still uploaded to `Photos`. The asset is saved with `status` `needs_review`. A decoded VIN photo does not set that flag. A mix of one decoded photo and one unread file does.
+
+Grok Bot's job on those rows:
+
+1. Re-read `assets.json` and open the `photo_ids` files in `Photos`.
+2. Fill only fields you can actually see in the photo or PDF. Use the field for that `asset_type`. Leave the rest off.
+3. Do not guess a year, a model, a price, or a VIN from memory. If the page already stored a vPIC value, do not replace it with a different guess.
+4. When the photos have been read and the blanks you can fill are written, remove `needs_review`. If you still cannot tell what the asset is, leave `needs_review` in place.
+5. Same write rules as everything else: re-read, keep ids, do not replace the file, set `updated_at`.
+
 ## Do not invent data
 
 Unknown means omit the field. Do not guess a model, a trim, an owner, a cost, a date, a category, or a status. Do not copy a value from a different asset to fill a blank. Do not add a "helpful" note the owner did not state.
@@ -97,7 +112,7 @@ Unknown means omit the field. Do not guess a model, a trim, an owner, a cost, a 
 The seed vehicles are the exception that proves the rule. Their facts are only:
 
 - 2017 Toyota 4Runner. Name `2017 Toyota 4Runner`. VIN `JTEBU5JR6H5470907`. Model code `GRN285L-GKAGKA`. Engine `1GR-FE`. Paint `1G3`.
-- 1998 Chevrolet S10. Name `1998 Chevrolet S10`. VIN `1GCCS14X1WK105227`. Engine `4.3L LF6`. Notes `2WD` (there is no drivetrain field). Mods `MerCruiser 4.3 Gen+ engine (serial 0L057753) on LF6 donor, marine 4.3L oil pan`.
+- 1998 Chevrolet S10. Name `1998 Chevrolet S10`. VIN `1GCCS14X1WK105227`. Engine `4.3L LF6`. Notes `2WD` (the seed kept that in notes; new car rows use `drive`). Mods `MerCruiser 4.3 Gen+ engine (serial 0L057753) on LF6 donor, marine 4.3L oil pan`.
 - 2011 Ram, name `Truckasaurus`. VIN `3D7LT2ET4BG551507`. Purchase date `2021-06-15`. Cost `18500`. Location `Island`. Notes `estimated value $7,500`. Model is unknown; leave it off.
 - One purchase: vendor `RockAuto`, order `364948524`, `unit_price` `147.21`, asset the S10, status `ordered`. No part number, no qty, no shipping.
 

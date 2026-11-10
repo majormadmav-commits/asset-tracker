@@ -13,9 +13,9 @@ Until a Google client id is pasted into `site/config.js`, that URL opens in **lo
 1. Open the site in Android Chrome.
 2. Sign in with Google once `config.js` has the client id. The first sign-in creates a My Drive folder named `Asset Tracker`, the three JSON files, and a `Photos` folder. Do not create that folder yourself first. This app's permission is `drive.file`, so it can only see files it created.
 3. In Chrome: menu → **Add to Home screen** (or Install app). The manifest and service worker make it stand alone. The shell is cached. Reading and saving the Drive files needs a connection.
-4. Add an asset. Open it for the meter, maintenance, and purchases. A maintenance photo is taken with the camera, scaled on the phone to a JPEG about 1600px on the long side, then uploaded to `Photos`.
+4. The page is three buttons: **Assets**, **+ Add Asset**, and **Log Maintenance**. The asset list has **Refresh**. Add Asset starts with **Take photo / upload file** (camera or a file, including a PDF). Pick a type and the fields change. A VIN barcode, or a VIN you type, is looked up on the free NHTSA vPIC API and fills year, make, model, engine, and drive. A photo that cannot be read is still saved, and the asset is marked `needs_review` for a later pass. Maintenance and purchases are on the asset. Photos are scaled to a JPEG about 1600px on the long side before they go to `Photos`.
 
-Large empty files mean "unknown." The only required field is the asset name. Ids (`A0001`, `M0001`, `P0001`) are assigned by the app and are never reused.
+Ids (`A0001`, `M0001`, `P0001`) are assigned by the app and are never reused. A name can be blank when the only thing you have is an unread photo.
 
 When `assets.json` has no assets, **Import seed data** loads the three known vehicles. It does not guess anything else. See [BOT-CONTRACT.md](BOT-CONTRACT.md) for the exact facts and for the rules an agent must follow if it edits the Drive files itself.
 
@@ -115,7 +115,8 @@ A few choices are worth knowing:
 
 - Each JSON file has `next_id`. Deleting the highest row must not hand that id out again, so the counter only moves forward. The app also scans the rows so a stale counter cannot collide.
 - Saves send `If-Match` with the ETag from the re-read. A 412 reads again and reapplies the edit, so two saves do not drop a row the other one just added.
-- The RockAuto order total of $147.21 is `unit_price` on one line. Qty and shipping are unknown, so they are omitted. The S10's `2WD` is in `notes` because there is no drivetrain field. Truckasaurus has no model, because that was not in the known facts.
+- The RockAuto order total of $147.21 is `unit_price` on one line. Qty and shipping are unknown, so they are omitted. The S10 seed still has `2WD` in `notes`. New cars use the `drive` field. Truckasaurus has no model, because that was not in the known facts.
+- Which fields appear for a type is `site/js/field-config.js`. Unread photos set `status` to `needs_review`. See BOT-CONTRACT.md for how a later pass fills those and clears the flag.
 - `updated_at` is stamped by the app when it writes an asset. It is not in the seed file.
 - A new meter, maintenance, or purchase form suggests today's date. It is only stored if you leave it there and tap save.
 - There is no delete in v1. Removing a row by hand is allowed only if `next_id` stays where it is.

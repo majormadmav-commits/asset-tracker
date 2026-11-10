@@ -1,7 +1,10 @@
+import { findVinInImage } from "./barcode.js";
 import { createDriveStore } from "./drive-store.js";
+import { reviewStatus } from "./field-config.js";
 import { createLocalStore } from "./local-store.js";
 import { photoFileName, resizeToJpeg } from "./photo.js";
-import { listCountText, listResultsHtml, photoIdsOnScreen, renderApp } from "./render.js";
+import { photoIdsOnScreen, renderApp } from "./render.js";
+import { applyVin, decodeVin, extractVin } from "./vin.js";
 
 const root = document.getElementById("app");
 
@@ -13,18 +16,19 @@ const state = {
   needsSignIn: false,
   booting: true,
   data: null,
-  search: "",
   message: null,
   busy: false,
   busyText: "",
   draft: null,
-  pendingPhoto: null,
+  pendingFiles: [],
+  vinNote: "",
   photoUrls: {},
   photoErrors: {},
   view: { name: "list" },
 };
 
 let keepMessage = false;
+let vinTimer = 0;
 
 function clientId() {
   return String(window.ASSET_TRACKER_CONFIG?.GOOGLE_CLIENT_ID || "").trim();
@@ -42,14 +46,10 @@ function parseRoute() {
   const [path, query = ""] = raw.split("?");
   const parts = path.split("/").filter(Boolean);
   const params = new URLSearchParams(query);
-  if (parts[0] === "asset" && parts[1] === "new") {
-    return { name: "asset-form", parentId: params.get("parent") || "" };
-  }
+  if (parts[0] === "maintenance") return { name: "maintenance", assetId: params.get("asset") || "" };
+  if (parts[0] === "asset" && parts[1] === "new") return { name: "asset-form" };
   if (parts[0] === "asset" && parts[1]) {
     const id = decodeURIComponent(parts[1]);
-    if (parts[2] === "edit") return { name: "asset-form", id };
-    if (parts[2] === "meter") return { name: "meter", id };
-    if (parts[2] === "maintenance") return { name: "maintenance", id };
     if (parts[2] === "purchase") return { name: "purchase", id };
     return { name: "detail", id };
   }
@@ -58,17 +58,7 @@ function parseRoute() {
 
 function render() {
   state.view = parseRoute();
-  const search = document.getElementById("search");
-  const keepSearch = state.view.name === "list" && search && document.activeElement === search;
-  const selectionStart = keepSearch ? search.selectionStart : null;
   root.innerHTML = renderApp(state);
-  if (keepSearch) {
-    const next = document.getElementById("search");
-    if (next) {
-      next.focus();
-      if (selectionStart != null) next.setSelectionRange(selectionStart, selectionStart);
-    }
-  }
   void hydratePhotos();
 }
 
@@ -95,9 +85,17 @@ async function reload() {
   render();
 }
 
+function clearPendingFiles() {
+  for (const item of state.pendingFiles) {
+    if (item.url) URL.revokeObjectURL(item.url);
+  }
+  state.pendingFiles = [];
+  state.vinNote = "";
+}
+
 function go(hash, message) {
   state.draft = null;
-  clearPendingPhoto();
+  clearPendingFiles();
   state.busy = false;
   state.busyText = "";
   state.message = message || null;
@@ -110,15 +108,9 @@ function go(hash, message) {
   location.hash = hash;
 }
 
-function clearPendingPhoto() {
-  if (state.pendingPhoto?.url) URL.revokeObjectURL(state.pendingPhoto.url);
-  state.pendingPhoto = null;
-}
-
 function readForm(form) {
   const data = {};
-  const formData = new FormData(form);
-  for (const [key, value] of formData.entries()) {
+  for (const [key, value] of new FormData(form).entries()) {
     if (key === "photo") continue;
     data[key] = typeof value === "string" ? value : "";
   }
@@ -162,6 +154,81 @@ async function withBusy(label, fn) {
   }
 }
 
+function safeUploadName(file) {
+  const cleaned = String(file?.name || "file").replace(/[^A-Za-z0-9._-]/g, "");
+  return cleaned || "file";
+}
+
+async function uploadOne(file, fallbackId) {
+  if (file.type.startsWith("image/")) {
+    const resized = await resizeToJpeg(file);
+    return state.store.uploadPhoto(resized.blob, photoFileName(fallbackId));
+  }
+  return state.store.uploadPhoto(file, safeUploadName(file));
+}
+
+async function lookupVin(vin) {
+  const current = extractVin(vin);
+  if (!current || parseRoute().name !== "asset-form") return;
+  state.busy = true;
+  state.busyText = "Looking up VIN…";
+  state.message = null;
+  render();
+  try {
+    const decoded = await decodeVin(current);
+    if (parseRoute().name !== "asset-form") return;
+    state.draft = applyVin(state.draft, decoded.fields, current);
+    state.vinNote = "Filled year, make, model, engine, and drive from the VIN.";
+    state.busy = false;
+    state.busyText = "";
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function ingestFiles(files) {
+  const form = document.querySelector('form[data-form="asset"]');
+  if (form) state.draft = readForm(form);
+  state.busy = true;
+  state.busyText = "Reading photo…";
+  state.message = null;
+  render();
+  try {
+    for (const file of files) {
+      const item = {
+        file,
+        decoded: false,
+        url: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
+      };
+      if (file.type.startsWith("image/")) {
+        try {
+          const vin = await findVinInImage(file);
+          if (vin) {
+            item.decoded = true;
+            state.draft = applyVin(state.draft, {}, vin);
+            try {
+              const decoded = await decodeVin(vin);
+              state.draft = applyVin(state.draft, decoded.fields, vin);
+              state.vinNote = "Filled year, make, model, engine, and drive from the VIN.";
+            } catch (error) {
+              state.message = { type: "error", text: errorText(error) };
+            }
+          }
+        } catch (error) {
+          state.message = { type: "error", text: errorText(error) };
+        }
+      }
+      state.pendingFiles.push(item);
+    }
+    state.busy = false;
+    state.busyText = "";
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
 async function onSubmit(form) {
   const kind = form.dataset.form;
   const data = readForm(form);
@@ -169,36 +236,39 @@ async function onSubmit(form) {
   const view = parseRoute();
   await withBusy("Saving…", async () => {
     if (kind === "asset") {
-      const saved = await state.store.saveAsset(data);
-      await loadData();
-      go(`#/asset/${encodeURIComponent(saved.id)}`, { type: "success", text: `Saved ${saved.name}.` });
-      return;
-    }
-    if (kind === "meter") {
-      const saved = await state.store.updateMeter(view.id, data);
-      await loadData();
-      go(`#/asset/${encodeURIComponent(saved.id)}`, {
-        type: "success",
-        text: `Updated meter for ${saved.name}.`,
+      const photoIds = [];
+      for (const item of state.pendingFiles) {
+        photoIds.push(await uploadOne(item.file, data.asset_type || "asset"));
+      }
+      const status = reviewStatus(state.pendingFiles);
+      const saved = await state.store.saveAsset({
+        ...data,
+        photo_ids: photoIds,
+        ...(status ? { status } : {}),
       });
+      const label = saved.name || saved.id;
+      const text = status
+        ? `Saved ${label}. Photos that could not be read are marked needs review.`
+        : `Saved ${label}.`;
+      await loadData();
+      go(`#/asset/${encodeURIComponent(saved.id)}`, { type: "success", text });
       return;
     }
     if (kind === "maintenance") {
+      if (!data.asset_id) throw new Error("Choose an asset for this maintenance entry.");
       const photoIds = [];
-      if (state.pendingPhoto?.blob) {
-        const photoId = await state.store.uploadPhoto(state.pendingPhoto.blob, photoFileName(view.id));
-        photoIds.push(photoId);
-      }
-      const saved = await state.store.addMaintenance({ ...data, asset_id: view.id, photo_ids: photoIds });
+      const file = form.querySelector('input[type="file"]')?.files?.[0];
+      if (file) photoIds.push(await uploadOne(file, data.asset_id));
+      const saved = await state.store.addMaintenance({ ...data, photo_ids: photoIds });
       await loadData();
-      go(`#/asset/${encodeURIComponent(view.id)}`, {
+      go(`#/asset/${encodeURIComponent(data.asset_id)}`, {
         type: "success",
         text: `Saved maintenance ${saved.id}.`,
       });
       return;
     }
     if (kind === "purchase") {
-      const saved = await state.store.addPurchase({ ...data, asset_id: data.asset_id || view.id });
+      const saved = await state.store.addPurchase(data);
       await loadData();
       go(`#/asset/${encodeURIComponent(view.id)}`, { type: "success", text: `Saved purchase ${saved.id}.` });
     }
@@ -220,8 +290,7 @@ async function importSeed() {
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
+    if (document.querySelector(`script[src="${src}"]`)) {
       resolve();
       return;
     }
@@ -238,12 +307,9 @@ function createAuth(id) {
   let token = "";
   let expiresAt = 0;
   let client = null;
-
   function clientInstance() {
     if (client) return client;
-    if (!window.google?.accounts?.oauth2) {
-      throw new Error("Google sign-in is not available yet.");
-    }
+    if (!window.google?.accounts?.oauth2) throw new Error("Google sign-in is not available yet.");
     client = window.google.accounts.oauth2.initTokenClient({
       client_id: id,
       scope: "https://www.googleapis.com/auth/drive.file",
@@ -251,7 +317,6 @@ function createAuth(id) {
     });
     return client;
   }
-
   function requestToken(prompt) {
     return new Promise((resolve, reject) => {
       const tokenClient = clientInstance();
@@ -272,7 +337,6 @@ function createAuth(id) {
       tokenClient.requestAccessToken(prompt ? { prompt } : {});
     });
   }
-
   return {
     async signIn() {
       await loadScript("https://accounts.google.com/gsi/client");
@@ -313,10 +377,7 @@ async function boot() {
   if (state.mode === "drive" && !clientId()) {
     state.booting = false;
     state.needsSignIn = true;
-    state.message = {
-      type: "error",
-      text: "Google client ID is missing. Paste it into config.js. See the README.",
-    };
+    state.message = { type: "error", text: "Google client ID is missing. Paste it into config.js. See the README." };
     render();
     return;
   }
@@ -340,8 +401,7 @@ async function boot() {
 function registerServiceWorker() {
   const param = new URLSearchParams(location.search).get("store");
   if (param === "local" || !("serviceWorker" in navigator)) return;
-  const url = new URL("../sw.js", import.meta.url);
-  navigator.serviceWorker.register(url).catch((error) => {
+  navigator.serviceWorker.register(new URL("../sw.js", import.meta.url)).catch((error) => {
     console.warn("Service worker registration failed:", error);
   });
 }
@@ -355,11 +415,12 @@ root.addEventListener("click", (event) => {
     render();
     return;
   }
-  if (action === "clear-photo") {
-    const form = button.closest("form");
-    if (form) state.draft = readForm(form);
-    clearPendingPhoto();
-    render();
+  if (action === "refresh") {
+    void withBusy("Refreshing…", async () => {
+      state.busy = false;
+      state.busyText = "";
+      await reload();
+    });
     return;
   }
   if (action === "import-seed") {
@@ -396,49 +457,34 @@ root.addEventListener("submit", (event) => {
   void onSubmit(form);
 });
 
-root.addEventListener("input", (event) => {
-  if (event.target?.id !== "search") return;
-  state.search = event.target.value;
-  const slot = document.getElementById("asset-list");
-  if (!slot || !state.data) return;
-  slot.innerHTML = listResultsHtml(state);
-  const count = document.querySelector("[data-testid='asset-count']");
-  const text = listCountText(state);
-  if (count) count.textContent = text;
+root.addEventListener("change", (event) => {
+  if (event.target?.name === "asset_type" && event.target.form) {
+    state.draft = readForm(event.target.form);
+    state.message = null;
+    render();
+    return;
+  }
+  if (event.target?.id === "photo") {
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    if (files.length) void ingestFiles(files);
+  }
 });
 
-root.addEventListener("change", (event) => {
-  if (event.target?.id !== "photo") return;
-  const file = event.target.files?.[0];
-  if (!file) return;
-  const form = event.target.form;
-  if (form) state.draft = readForm(form);
-  void (async () => {
-    try {
-      state.busy = true;
-      state.busyText = "Resizing photo…";
-      state.message = null;
-      render();
-      const resized = await resizeToJpeg(file);
-      if (state.pendingPhoto?.url) URL.revokeObjectURL(state.pendingPhoto.url);
-      state.pendingPhoto = {
-        blob: resized.blob,
-        width: resized.width,
-        height: resized.height,
-        url: URL.createObjectURL(resized.blob),
-      };
-      state.busy = false;
-      state.busyText = "";
-      render();
-    } catch (error) {
-      showError(error);
-    }
-  })();
+root.addEventListener("input", (event) => {
+  if (event.target?.name !== "vin_serial") return;
+  if (event.target.form) state.draft = readForm(event.target.form);
+  const vin = extractVin(event.target.value);
+  window.clearTimeout(vinTimer);
+  if (!vin) return;
+  vinTimer = window.setTimeout(() => {
+    void lookupVin(vin);
+  }, 250);
 });
 
 window.addEventListener("hashchange", () => {
   state.draft = null;
-  clearPendingPhoto();
+  clearPendingFiles();
   state.busy = false;
   state.busyText = "";
   if (!keepMessage) state.message = null;

@@ -1,4 +1,4 @@
-const CACHE = "asset-tracker-shell-v1";
+const CACHE = "asset-tracker-shell-v2";
 
 const SHELL = [
   "./",
@@ -15,6 +15,9 @@ const SHELL = [
   "./js/photo.js",
   "./js/format.js",
   "./js/storage-keys.js",
+  "./js/field-config.js",
+  "./js/vin.js",
+  "./js/barcode.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./seed/seed-data.json",
