@@ -1,4 +1,4 @@
-const CACHE = "asset-tracker-shell-v2";
+const CACHE = "asset-tracker-shell-v3";
 
 const SHELL = [
   "./",
@@ -19,6 +19,7 @@ const SHELL = [
   "./js/vin.js",
   "./js/barcode.js",
   "./icons/icon-192.png",
+  "./icons/logo-adventure.png",
   "./icons/icon-512.png",
   "./seed/seed-data.json",
 ];

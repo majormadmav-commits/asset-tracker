@@ -46,7 +46,7 @@ function shell(state, main) {
   return `<div class="app">
     <header class="top">
       <div class="brand-row">
-        <h1 class="brand">Asset Tracker</h1>
+        <h1 class="brand"><img class="brand-mark" src="icons/logo-adventure.png" alt="" width="40" height="38"> Asset Tracker</h1>
         ${signOut}
       </div>
       <p class="mode-line">${esc(mode)}</p>
@@ -301,7 +301,7 @@ function signInHtml(state) {
     ? `<p class="hint" role="status">${esc(state.busyText || "Working…")}</p>`
     : `<button type="button" class="button primary" data-action="sign-in">Sign in with Google</button>`;
   return `<div class="app">
-    <header class="top"><h1 class="brand">Asset Tracker</h1><p class="mode-line">Google Drive</p></header>
+    <header class="top"><h1 class="brand"><img class="brand-mark" src="icons/logo-adventure.png" alt="" width="40" height="38"> Asset Tracker</h1><p class="mode-line">Google Drive</p></header>
     <main id="main" data-view="sign-in"><section class="screen">${problem}<h2>Sign in</h2><p>Files are stored in a Google Drive folder named Asset Tracker. This page creates that folder the first time you sign in.</p>${action}</section></main>
   </div>`;
 }
