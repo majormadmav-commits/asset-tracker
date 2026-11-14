@@ -297,9 +297,13 @@ function signInHtml(state) {
   const problem = state.message
     ? `<div class="banner error" role="alert" data-testid="error-banner"><p>${esc(state.message.text)}</p></div>`
     : "";
-  const action = state.busy
-    ? `<p class="hint" role="status">${esc(state.busyText || "Working…")}</p>`
-    : `<button type="button" class="button primary" data-action="sign-in">Sign in with Google</button>`;
+  let action;
+  if (state.busy) action = `<p class="hint" role="status">${esc(state.busyText || "Working…")}</p>`;
+  else if (state.gisReady) {
+    action = `<button type="button" class="button primary" data-action="sign-in">Sign in with Google</button>`;
+  } else if (state.message?.type === "error") {
+    action = `<button type="button" class="button primary" data-action="retry">Try again</button>`;
+  } else action = `<p class="hint" role="status">Loading Google sign-in…</p>`;
   return `<div class="app">
     <header class="top"><h1 class="brand"><img class="brand-mark" src="icons/logo-adventure.png" alt="" width="40" height="38"> Asset Tracker</h1><p class="mode-line">Google Drive</p></header>
     <main id="main" data-view="sign-in"><section class="screen">${problem}<h2>Sign in</h2><p>Files are stored in a Google Drive folder named Asset Tracker. This page creates that folder the first time you sign in.</p>${action}</section></main>

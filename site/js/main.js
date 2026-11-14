@@ -14,6 +14,7 @@ const state = {
   auth: null,
   signedIn: false,
   needsSignIn: false,
+  gisReady: false,
   booting: true,
   data: null,
   message: null,
@@ -288,17 +289,36 @@ async function importSeed() {
   });
 }
 
+const GSI_SRC = "https://accounts.google.com/gsi/client";
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
-      resolve();
+    const fail = () => reject(new Error("Could not load Google sign-in."));
+    let existing = document.querySelector(`script[src="${src}"]`);
+    if (existing?.dataset.failed === "true") {
+      existing.remove();
+      existing = null;
+    }
+    if (existing) {
+      if (existing.dataset.loaded === "true") {
+        resolve();
+        return;
+      }
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", fail, { once: true });
       return;
     }
     const script = document.createElement("script");
     script.src = src;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Could not load Google sign-in."));
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      resolve();
+    };
+    script.onerror = () => {
+      script.dataset.failed = "true";
+      fail();
+    };
     document.head.appendChild(script);
   });
 }
@@ -307,44 +327,84 @@ function createAuth(id) {
   let token = "";
   let expiresAt = 0;
   let client = null;
+  let pending = null;
+
+  function finish(error, accessToken) {
+    const current = pending;
+    pending = null;
+    if (!current) return;
+    if (error) current.reject(error);
+    else current.resolve(accessToken);
+  }
+
+  function onToken(response) {
+    if (response.error) {
+      finish(new Error(response.error_description || response.error));
+      return;
+    }
+    token = response.access_token || "";
+    const seconds = Number(response.expires_in) || 3600;
+    expiresAt = Date.now() + seconds * 1000 - 60_000;
+    if (!token) {
+      finish(new Error("Google sign-in did not return an access token."));
+      return;
+    }
+    finish(null, token);
+  }
+
+  function onClientError(error) {
+    const type = error?.type || "";
+    const text =
+      type === "popup_failed_to_open"
+        ? "The Google sign-in window was blocked. Allow popups for this site, then tap Sign in again."
+        : type === "popup_closed"
+          ? "Google sign-in was closed before it finished."
+          : error?.message || "Google sign-in could not open.";
+    finish(new Error(text));
+  }
+
   function clientInstance() {
     if (client) return client;
     if (!window.google?.accounts?.oauth2) throw new Error("Google sign-in is not available yet.");
     client = window.google.accounts.oauth2.initTokenClient({
       client_id: id,
       scope: "https://www.googleapis.com/auth/drive.file",
-      callback: () => {},
+      callback: onToken,
+      error_callback: onClientError,
     });
     return client;
   }
+
   function requestToken(prompt) {
-    return new Promise((resolve, reject) => {
-      const tokenClient = clientInstance();
-      tokenClient.callback = (response) => {
-        if (response.error) {
-          reject(new Error(response.error_description || response.error));
-          return;
-        }
-        token = response.access_token || "";
-        const seconds = Number(response.expires_in) || 3600;
-        expiresAt = Date.now() + seconds * 1000 - 60_000;
-        if (!token) {
-          reject(new Error("Google sign-in did not return an access token."));
-          return;
-        }
-        resolve(token);
-      };
-      tokenClient.requestAccessToken(prompt ? { prompt } : {});
+    const tokenClient = clientInstance();
+    if (pending) return Promise.reject(new Error("Google sign-in is already in progress."));
+    let rejectPending;
+    const promise = new Promise((resolve, reject) => {
+      pending = { resolve, reject };
+      rejectPending = reject;
     });
+    try {
+      tokenClient.requestAccessToken(prompt ? { prompt } : {});
+    } catch (error) {
+      pending = null;
+      rejectPending(error);
+    }
+    return promise;
   }
+
   return {
-    async signIn() {
-      await loadScript("https://accounts.google.com/gsi/client");
-      await requestToken("consent");
+    async prepare() {
+      await loadScript(GSI_SRC);
+      clientInstance();
+    },
+    // Call from the tap handler. Android Chrome blocks the popup if this waits.
+    beginSignIn() {
+      if (token && Date.now() < expiresAt) return Promise.resolve(token);
+      return requestToken("consent");
     },
     async getAccessToken() {
       if (token && Date.now() < expiresAt) return token;
-      await loadScript("https://accounts.google.com/gsi/client");
+      await loadScript(GSI_SRC);
       return requestToken("");
     },
     signOut() {
@@ -395,7 +455,18 @@ async function boot() {
   state.auth = createAuth(clientId());
   state.needsSignIn = true;
   state.booting = false;
+  state.gisReady = false;
+  state.message = null;
   render();
+  try {
+    await state.auth.prepare();
+    if (!state.needsSignIn) return;
+    state.gisReady = true;
+    render();
+  } catch (error) {
+    if (!state.needsSignIn) return;
+    showError(error);
+  }
 }
 
 function registerServiceWorker() {
@@ -432,9 +503,16 @@ root.addEventListener("click", (event) => {
     return;
   }
   if (action === "sign-in") {
+    if (!state.auth) state.auth = createAuth(clientId());
+    let signingIn;
+    try {
+      signingIn = state.auth.beginSignIn();
+    } catch (error) {
+      showError(error);
+      return;
+    }
     void withBusy("Signing in…", async () => {
-      if (!state.auth) state.auth = createAuth(clientId());
-      await state.auth.signIn();
+      await signingIn;
       await connectDrive();
     });
     return;
