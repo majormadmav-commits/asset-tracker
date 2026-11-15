@@ -1,31 +1,10 @@
-const CACHE = "asset-tracker-shell-v3";
+// Installed-app worker. It does not store the page or any response.
+// An older worker cached the shell and could show that copy again; activate
+// deletes those caches. Same-origin files are always re-read from the network
+// so the next load is the current page. Google, Drive, fonts, and other
+// cross-origin calls are not intercepted.
 
-const SHELL = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./config.js",
-  "./manifest.webmanifest",
-  "./js/main.js",
-  "./js/render.js",
-  "./js/local-store.js",
-  "./js/drive-store.js",
-  "./js/schema.js",
-  "./js/ids.js",
-  "./js/photo.js",
-  "./js/format.js",
-  "./js/storage-keys.js",
-  "./js/field-config.js",
-  "./js/vin.js",
-  "./js/barcode.js",
-  "./icons/icon-192.png",
-  "./icons/logo-adventure.png",
-  "./icons/icon-512.png",
-  "./seed/seed-data.json",
-];
-
-self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
@@ -33,24 +12,23 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
 
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
+  const request = event.request;
+  if (request.method !== "GET") return;
+  if (request.cache === "only-if-cached" && request.mode !== "same-origin") return;
+  const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (event.request.method !== "GET") return;
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(event.request, copy));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request).then((hit) => hit || caches.match("./index.html"))),
-  );
+
+  // A navigation request cannot be copied with a RequestInit. Fetch the URL
+  // directly so the browser HTTP cache cannot satisfy it either.
+  const fresh =
+    request.mode === "navigate"
+      ? fetch(request.url, { cache: "no-store", credentials: "same-origin", redirect: "follow" })
+      : fetch(request, { cache: "no-store" });
+  event.respondWith(fresh);
 });

@@ -12,7 +12,7 @@ Until a Google client id is pasted into `site/config.js`, that URL opens in **lo
 
 1. Open the site in Android Chrome.
 2. Sign in with Google once `config.js` has the client id. The first sign-in creates a My Drive folder named `Asset Tracker`, the three JSON files, and a `Photos` folder. Do not create that folder yourself first. This app's permission is `drive.file`, so it can only see files it created.
-3. In Chrome: menu → **Add to Home screen** (or Install app). The manifest and service worker make it stand alone. The shell is cached. Reading and saving the Drive files needs a connection.
+3. In Chrome: menu → **Install page as app** (on Android: **Install app** or **Add to Home screen**). It is named Asset Tracker, uses its own icon, and opens full screen with no browser bar. The page is not cached. Each open loads the current page, and records still come live from Drive. Saving needs a connection. On iPhone, Share → **Add to Home Screen** uses the same name and icon.
 4. The page is three buttons: **Assets**, **+ Add Asset**, and **Log Maintenance**. The asset list has **Refresh**. Add Asset starts with **Take photo / upload file** (camera or a file, including a PDF). Pick a type and the fields change. A VIN barcode, or a VIN you type, is looked up on the free NHTSA vPIC API and fills year, make, model, engine, and drive. A photo that cannot be read is still saved, and the asset is marked `needs_review` for a later pass. Maintenance and purchases are on the asset. Photos are scaled to a JPEG about 1600px on the long side before they go to `Photos`.
 
 Ids (`A0001`, `M0001`, `P0001`) are assigned by the app and are never reused. A name can be blank when the only thing you have is an unread photo.
